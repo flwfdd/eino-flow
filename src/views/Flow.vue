@@ -1,108 +1,197 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import type { Node, Edge } from '@vue-flow/core'
-import { VueFlow } from '@vue-flow/core'
+import { Panel, useVueFlow, VueFlow } from '@vue-flow/core'
 
-// these components are only shown as examples of how to use a custom node or edge
-// you can find many examples of how to create these custom components in the examples page of the docs
-import SpecialNode from '@/components/SpecialNode.vue'
-import SpecialEdge from '@/components/SpecialEdge.vue'
+import { Background } from '@vue-flow/background'
+import { MiniMap } from '@vue-flow/minimap'
+import { Controls } from '@vue-flow/controls'
+import axios from 'axios'
+import { useLayout } from './useLayout'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
 
-// these are our nodes
-const nodes = ref<Node[]>([
-  // an input node, specified by using `type: 'input'`
-  {
-    id: '1',
-    type: 'input',
-    position: { x: 250, y: 5 },
-    // all nodes can have a data object containing any data you want to pass to the node
-    // a label can property can be used for default nodes
-    data: { label: 'Node 1' },
+const { layout, layoutConfig } = useLayout()
+const { fitView } = useVueFlow()
+
+axios.defaults.baseURL = 'http://127.0.0.1:52538/eino/devops/debug/v1'
+
+const graphId = ref('')
+const graphOptions = ref<{ id: string; name: string }[]>([])
+axios.get('/graphs').then((res) => {
+  graphOptions.value = res.data.data.graphs
+  graphId.value = res.data.data.graphs[0].id
+})
+
+watch(
+  layoutConfig,
+  () => {
+    layoutGraph()
   },
+  { deep: true },
+)
 
-  // default node, you can omit `type: 'default'` as it's the fallback type
-  {
-    id: '2',
-    position: { x: 100, y: 100 },
-    data: { label: 'Node 2' },
-  },
+// 自动布局图
+async function layoutGraph() {
+  try {
+    const updatedNodes = await layout(nodes.value, edges.value)
+    nodes.value = [...updatedNodes]
 
-  // An output node, specified by using `type: 'output'`
-  {
-    id: '3',
-    type: 'output',
-    position: { x: 400, y: 200 },
-    data: { label: 'Node 3' },
-  },
+    nextTick(() => {
+      fitView()
+    })
+  } catch (error) {
+    console.error('Layout error:', error)
+  }
+}
 
-  // this is a custom node
-  // we set it by using a custom type name we choose, in this example `special`
-  // the name can be freely chosen, there are no restrictions as long as it's a string
-  {
-    id: '4',
-    type: 'special', // <-- this is the custom node type name
-    position: { x: 400, y: 200 },
-    data: {
-      label: 'Node 4',
-      hello: 'world',
-    },
-  },
-])
+const nodes = ref<Node[]>([])
+const edges = ref<Edge[]>([])
+const outputMap = new Map<string, string>()
+const inputMap = new Map<string, string>()
 
-// these are our edges
-const edges = ref<Edge[]>([
-  // default bezier edge
-  // consists of an edge id, source node id and target node id
-  {
-    id: 'e1->2',
-    source: '1',
-    target: '2',
-  },
+const extractNode = (node: any, parent: string): { nodes: Node[]; edges: Edge[] } => {
+  const key = `${parent}/${node.key}`
+  let nodes: Node[] = []
+  const edges: Edge[] = []
+  switch (node.type) {
+    case 'start':
+      if (!parent) {
+        nodes.push({
+          id: key,
+          type: 'input',
+          label: node.name,
+          position: { x: 0, y: 0 },
+        })
+        outputMap.set(key, key)
+      }
+      break
+    case 'end':
+      if (!parent) {
+        nodes.push({
+          id: key,
+          type: 'output',
+          label: node.name,
+          position: { x: 0, y: 0 },
+        })
+        inputMap.set(key, key)
+      }
+      break
+    case 'Chain':
+      nodes.push({
+        id: key,
+        label: node.name,
+        position: { x: 0, y: 0 },
+        style: { background: '#aaeeff11' },
+      })
+      const subPrefix = key
+      for (const n of node.graph_schema.nodes) {
+        // 忽略子图中的 start 和 end
+        if (n.type === 'start' || n.type === 'end') {
+          continue
+        }
+        const { nodes: sub_nodes, edges: sub_edges } = extractNode(n, subPrefix)
+        nodes.push(...sub_nodes)
+        edges.push(...sub_edges)
+      }
+      for (const e of node.graph_schema.edges) {
+        // 将连接到父图的边透传到子图
+        if (e.source_node_key === 'start') {
+          inputMap.set(key, `${subPrefix}/${e.target_node_key}`)
+          continue
+        }
+        if (e.target_node_key === 'end') {
+          outputMap.set(key, `${subPrefix}/${e.source_node_key}`)
+          continue
+        }
+        edges.push({
+          id: `${subPrefix}/${e.id}`,
+          source: outputMap.get(`${subPrefix}/${e.source_node_key}`) || '',
+          target: inputMap.get(`${subPrefix}/${e.target_node_key}`) || '',
+          animated: true,
+        })
+      }
+      break
+    default:
+      nodes.push({
+        id: key,
+        label: node.name || node.key,
+        position: { x: 0, y: 0 },
+      })
+      outputMap.set(key, key)
+      inputMap.set(key, key)
+      break
+  }
+  if (parent) {
+    nodes = nodes.map((n) => ({
+      ...n,
+      parentNode: parent,
+      extent: 'parent',
+    }))
+  }
+  return { nodes, edges }
+}
 
-  // set `animated: true` to create an animated edge path
-  {
-    id: 'e2->3',
-    source: '2',
-    target: '3',
-    animated: true,
-  },
-
-  // a custom edge, specified by using a custom type name
-  // we choose `type: 'special'` for this example
-  {
-    id: 'e3->4',
-    type: 'special',
-    source: '3',
-    target: '4',
-
-    // all edges can have a data object containing any data you want to pass to the edge
-    data: {
-      hello: 'world',
+watch(graphId, async () => {
+  axios.get(`/graphs/${graphId.value}/canvas`).then(async (res) => {
+    nodes.value = []
+    edges.value = []
+    outputMap.clear()
+    inputMap.clear()
+    const prefix = ''
+    for (const node of res.data.data.canvas_info.nodes) {
+      const { nodes: sub_nodes, edges: sub_edges } = extractNode(node, prefix)
+      nodes.value.push(...sub_nodes)
+      edges.value.push(...sub_edges)
     }
-  },
-])
+    for (const edge of res.data.data.canvas_info.edges) {
+      edges.value.push({
+        id: `${prefix}/${edge.id}`,
+        source: outputMap.get(`${prefix}/${edge.source_node_key}`) || '',
+        target: inputMap.get(`${prefix}/${edge.target_node_key}`) || '',
+        animated: true,
+        zIndex: 2333,
+      })
+    }
+  })
+})
 </script>
 
 <template>
   <div class="w-full h-full">
-    <VueFlow :nodes="nodes" :edges="edges">
-      <!-- bind your custom node type to a component by using slots, slot names are always `node-<type>` -->
-      <template #node-special="specialNodeProps">
-        <SpecialNode v-bind="specialNodeProps" />
-      </template>
+    <VueFlow :nodes="nodes" :edges="edges" @nodes-initialized="layoutGraph">
+      <Background />
+      <MiniMap />
+      <Controls />
 
-      <!-- bind your custom edge type to a component by using slots, slot names are always `edge-<type>` -->
-      <template #edge-special="specialEdgeProps">
-        <SpecialEdge v-bind="specialEdgeProps" />
-      </template>
+      <Panel position="top-left" class="bg-background">
+        <Select v-model="graphId">
+          <SelectTrigger class="w-[280px]">
+            <SelectValue placeholder="Select a graph" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="option in graphOptions" :key="option.id" :value="option.id">
+              {{ option.name }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <Button variant="outline" @click="layoutConfig.isHorizontal = true">Layout LR</Button>
+        <Button variant="outline" @click="layoutConfig.isHorizontal = false">Layout TB</Button>
+        <Button variant="outline" @click="layoutGraph">Layout</Button>
+      </Panel>
     </VueFlow>
   </div>
 </template>
 
 <style>
-/* import the necessary styles for Vue Flow to work */
 @import '@vue-flow/core/dist/style.css';
-
-/* import the default theme, this is optional but generally recommended */
 @import '@vue-flow/core/dist/theme-default.css';
+@import '@vue-flow/minimap/dist/style.css';
+@import '@vue-flow/controls/dist/style.css';
 </style>

@@ -6,7 +6,7 @@ const router = createRouter({
     {
       path: '/',
       name: 'flow',
-      component:  () => import('../views/Flow.vue'),
+      component: () => import('../views/Flow.vue'),
     },
   ],
 })
