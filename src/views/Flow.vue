@@ -16,26 +16,26 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
-
-const { layout, layoutConfig } = useLayout()
-const { fitView } = useVueFlow()
-
-axios.defaults.baseURL = 'http://127.0.0.1:52538/eino/devops/debug/v1'
+import SimpleNode from '@/components/flow/SimpleNode.vue'
+import { Input } from '@/components/ui/input'
 
 const graphId = ref('')
 const graphOptions = ref<{ id: string; name: string }[]>([])
-axios.get('/graphs').then((res) => {
-  graphOptions.value = res.data.data.graphs
-  graphId.value = res.data.data.graphs[0].id
+const baseURL = ref('http://127.0.0.1:52538/eino/devops/debug/v1')
+
+function getGraphOptions() {
+  axios.get(`${baseURL.value}/graphs`).then((res) => {
+    graphOptions.value = res.data.data.graphs
+    graphId.value = res.data.data.graphs[0].id
+  })
+}
+getGraphOptions()
+watch(baseURL, () => {
+  getGraphOptions()
 })
 
-watch(
-  layoutConfig,
-  () => {
-    layoutGraph()
-  },
-  { deep: true },
-)
+const { layout, layoutConfig } = useLayout()
+const { fitView } = useVueFlow()
 
 // 自动布局图
 async function layoutGraph() {
@@ -50,6 +50,13 @@ async function layoutGraph() {
     console.error('Layout error:', error)
   }
 }
+watch(
+  layoutConfig,
+  () => {
+    layoutGraph()
+  },
+  { deep: true },
+)
 
 const nodes = ref<Node[]>([])
 const edges = ref<Edge[]>([])
@@ -66,7 +73,7 @@ const extractNode = (node: any, parent: string): { nodes: Node[]; edges: Edge[] 
         nodes.push({
           id: key,
           type: 'input',
-          label: node.name,
+          label: `Input`,
           position: { x: 0, y: 0 },
         })
         outputMap.set(key, key)
@@ -77,7 +84,7 @@ const extractNode = (node: any, parent: string): { nodes: Node[]; edges: Edge[] 
         nodes.push({
           id: key,
           type: 'output',
-          label: node.name,
+          label: `Output`,
           position: { x: 0, y: 0 },
         })
         inputMap.set(key, key)
@@ -86,9 +93,9 @@ const extractNode = (node: any, parent: string): { nodes: Node[]; edges: Edge[] 
     case 'Chain':
       nodes.push({
         id: key,
-        label: node.name,
+        label: `Name[${node.name}] Type[${node.type}] Component[${node.component_schema.name}]`,
         position: { x: 0, y: 0 },
-        style: { background: '#aaeeff11' },
+        style: { background: '#aaeeff22' },
       })
       const subPrefix = key
       for (const n of node.graph_schema.nodes) {
@@ -121,8 +128,9 @@ const extractNode = (node: any, parent: string): { nodes: Node[]; edges: Edge[] 
     default:
       nodes.push({
         id: key,
-        label: node.name || node.key,
         position: { x: 0, y: 0 },
+        data: node,
+        type: 'simple',
       })
       outputMap.set(key, key)
       inputMap.set(key, key)
@@ -133,13 +141,16 @@ const extractNode = (node: any, parent: string): { nodes: Node[]; edges: Edge[] 
       ...n,
       parentNode: parent,
       extent: 'parent',
+      data: node,
+      type: 'simple',
     }))
   }
   return { nodes, edges }
 }
 
 watch(graphId, async () => {
-  axios.get(`/graphs/${graphId.value}/canvas`).then(async (res) => {
+  axios.get(`${baseURL.value}/graphs/${graphId.value}/canvas`).then(async (res) => {
+    console.log(res.data.data.canvas_info)
     nodes.value = []
     edges.value = []
     outputMap.clear()
@@ -171,8 +182,9 @@ watch(graphId, async () => {
       <Controls />
 
       <Panel position="top-left" class="bg-background">
+        <Input v-model="baseURL" placeholder="API Base URL" />
         <Select v-model="graphId">
-          <SelectTrigger class="w-[280px]">
+          <SelectTrigger>
             <SelectValue placeholder="Select a graph" />
           </SelectTrigger>
           <SelectContent>
@@ -181,10 +193,19 @@ watch(graphId, async () => {
             </SelectItem>
           </SelectContent>
         </Select>
-        <Button variant="outline" @click="layoutConfig.isHorizontal = true">Layout LR</Button>
-        <Button variant="outline" @click="layoutConfig.isHorizontal = false">Layout TB</Button>
-        <Button variant="outline" @click="layoutGraph">Layout</Button>
+        <Button variant="outline" @click="layoutConfig.isHorizontal = true">Layout →</Button>
+        <Button variant="outline" @click="layoutConfig.isHorizontal = false">Layout ↓</Button>
+        <Button variant="outline" @click="layoutGraph">ReLayout</Button>
       </Panel>
+
+      <template #node-simple="props">
+        <SimpleNode
+          :id="props.id"
+          :source-position="props.sourcePosition"
+          :target-position="props.targetPosition"
+          :data="props.data"
+        />
+      </template>
     </VueFlow>
   </div>
 </template>
